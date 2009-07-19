@@ -15,6 +15,7 @@
 #include "participant.hpp"
 #include "channel.hpp"
 #include "authmanager.hpp"
+#include "messagehandler.hpp"
 
 namespace debugirc
 {
@@ -125,6 +126,11 @@ namespace debugirc
 			return auth_manager_ && auth_manager_->Authorize(username, password);
 		}
 
+		void SetAuthManager(const AuthManagerPtr & value) {  auth_manager_ = value; }
+		const MessageHandlerPtr & GetMessageHandler() { return message_handler_; }
+		void SetMessageHandler(const MessageHandlerPtr & value) { message_handler_ = value; }
+
+
 	private:
 		// should not be changed after server started up
 		std::string server_name_;
@@ -132,6 +138,7 @@ namespace debugirc
 		std::string motd_;
 		std::string auto_join_;
 		AuthManagerPtr auth_manager_;
+		MessageHandlerPtr message_handler_;
 		// can be changed after server startup
 		ChannelMap channels_;
 		mutable boost::shared_mutex channel_sync_;

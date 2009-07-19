@@ -32,6 +32,32 @@ void DebugThread(debugirc::Server &  srv)
   {}
 }
 
+class TestMessageHandler
+	: public debugirc::MessageHandler
+{
+public:
+	TestMessageHandler(debugirc::Server &  server)
+		: server_(server)
+	{}
+	virtual void Handle(const std::string & username, const std::string & channel, const std::string & data, std::string & answer)
+	{
+		if(channel == "#system")
+		{
+			std::stringstream strstr;
+			strstr<<"system command "<<data;
+			answer = strstr.str();
+		}
+		else if(channel.length() > 0 &&  channel[0] == '#' && data.find('\n') == std::string::npos)
+		{
+			std::stringstream strstr;
+			strstr<<username<<" says "<<data<<" on channel "<<channel;
+			server_.GetChat().DeliverChannel(channel, strstr.str());
+		}
+	}
+private:
+	debugirc::Server & server_;
+};
+
 int main(int argc, char** argv)
 {
 	srand(time(0));
@@ -57,6 +83,7 @@ int main(int argc, char** argv)
 		s.GetChat().AddChannel("#debug", "DEBUG");
 		s.GetChat().AddChannel("#test", "Test  CHANNEL");
 		s.GetChat().AddChannel("#test2", "TEST2");
+		s.GetChat().SetMessageHandler(debugirc::MessageHandlerPtr(new TestMessageHandler(s)));
 
 		boost::thread t(boost::bind(&boost::asio::io_service::run, &io_service));
 		boost::thread_group t2;

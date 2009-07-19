@@ -26,6 +26,8 @@ namespace debugirc
 			public boost::enable_shared_from_this<Session>
 	{
 	public:
+		static const int PingInterval = 300; // 5 miniutes
+
 		Session(boost::asio::io_service& io_service, Chat& room)
 			: socket_(io_service),
 				bridge_(room),
@@ -36,6 +38,19 @@ namespace debugirc
 				closing_connection_(false),
 				ping_sent_(false)
 		{
+			registration_handlers_["NICK"] = &Session::MessageNick;
+			registration_handlers_["PASS"] = &Session::MessagePass;
+			registration_handlers_["USER"] = &Session::MessageUser;
+			message_handlers_["MODE"] = &Session::MessageIgnore;
+			message_handlers_["QUIT"] = &Session::MessageQuit;
+			message_handlers_["PING"] = &Session::MessagePing;
+			message_handlers_["JOIN"] = &Session::MessageJoin;
+			message_handlers_["PART"] = &Session::MessagePart;
+			message_handlers_["LIST"] = &Session::MessageList;
+			message_handlers_["WHO"] = &Session::MessageWho;
+			message_handlers_["PONG"] = &Session::MessagePong;
+			message_handlers_["PRIVMSG"] = &Session::MessagePrivMsg;
+			message_handlers_["NOTICE"] = &Session::MessageIgnore;
 		}
 
 		tcp::socket & GetSocket()
@@ -103,7 +118,7 @@ namespace debugirc
 				//std::cerr<<"AUTH "<<nick_<<" success\n";
 				authorized_ = true;
 				register_timeout_.cancel();
-				connection_timeout_.expires_from_now(boost::posix_time::seconds(120));
+				connection_timeout_.expires_from_now(boost::posix_time::seconds(PingInterval));
 				connection_timeout_.async_wait(boost::bind(&Session::HandleConnectionTimeout, shared_from_this(),
 								boost::asio::placeholders::error));
 				std::stringstream strstr;
@@ -131,6 +146,148 @@ namespace debugirc
 			}
 		}
 
+		void MessageIgnore(const std::string & command_id, const std::string & data, std::string & answer)
+		{}
+
+		void MessageUnknown(const std::string & command_id, const std::string & data, std::string & answer)
+		{
+			std::stringstream strstr;
+			WriteServerHeader(strstr, "421")<<command_id<<" :Command "<<command_id<<" is unknown or unsupported"<<"\n";
+			answer = strstr.str();
+		}
+
+		void MessageNick(const std::string & command_id, const std::string & data, std::string & answer)
+		{
+			nick_ = data;
+		}
+
+		void MessagePass(const std::string & command_id, const std::string & data, std::string & answer)
+		{
+			password_ = data;
+		}
+
+		void MessageUser(const std::string & command_id, const std::string & data, std::string & answer)
+		{
+			Authorize();
+		}
+
+		void MessageQuit(const std::string & command_id, const std::string & data, std::string & answer)
+		{
+			//std::cerr<<"!!!: quit\n";
+			Cleanup();
+		}
+
+		void MessagePing(const std::string & command_id, const std::string & data, std::string & answer)
+		{
+			std::stringstream strstr;
+			WriteServerHeaderNoNick(strstr, "PONG")<<bridge_.GetServerName()<<" :"<<data<<"\n";
+			answer = strstr.str();
+			if(!ping_sent_)
+			{
+				connection_timeout_.expires_from_now(boost::posix_time::seconds(PingInterval));
+				connection_timeout_.async_wait(boost::bind(&Session::HandleConnectionTimeout, shared_from_this(),
+							boost::asio::placeholders::error));
+			}
+		}
+
+		void MessageJoin(const std::string & command_id, const std::string & data, std::string & answer)
+		{
+			std::stringstream strstr;
+			if(data.length() > 1 && data[0]=='#' && bridge_.JoinChannel(data, shared_from_this()))
+			{
+				WriteUserHeaderNoNick(strstr, "JOIN")<<data<<" :"<<data<<"\n";
+				active_channels_.insert(data);
+			}
+			else
+			{
+				if(active_channels_.find(data) != active_channels_.end())
+				{
+					WriteUserHeaderNoNick(strstr, "JOIN")<<data<<" :"<<data<<"\n";
+				}
+				else
+				{
+					strstr<<":"<<nick_<<" 403 "<<data<<" :No such channel\n";
+				}
+			}
+			answer = strstr.str();
+		}
+
+		void MessagePart(const std::string & command_id, const std::string & data, std::string & answer)
+		{
+			std::stringstream strstr;
+			std::string channel;
+			std::string message;
+			SplitChannelMessage(data, channel, message);
+			if(!channel.empty())
+			{
+				WriteUserHeaderNoNick(strstr, "PART")<<data;
+				if(!message.empty())
+					strstr<<" :"<<data;
+				strstr<<"\n";
+				bridge_.LeaveChannel(channel, shared_from_this());
+				active_channels_.erase(channel);
+			}
+			else
+			{
+				strstr<<":"<<nick_<<" 403 "<<data<<" :No such channel\n";
+			}
+			answer = strstr.str();
+		}
+
+		void MessageList(const std::string & command_id, const std::string & data, std::string & answer)
+		{
+			std::stringstream strstr;
+			WriteServerHeader(strstr, "321")<<"Channel :Users  Name\n";
+			ChannelListBuilder builder(strstr, bridge_.GetServerName(), nick_);
+			bridge_.VisitChannels(&builder);
+			WriteServerHeader(strstr, "323")<<":End of /LIST\n";
+			answer = strstr.str();
+		}
+
+		void MessageWho(const std::string & command_id, const std::string & data, std::string & answer)
+		{
+			std::stringstream strstr;
+			WriteServerHeader(strstr, "315")<<data<<" :End of /WHO list.\n";
+			answer = strstr.str();
+		}
+
+		void MessagePong(const std::string & command_id, const std::string & data, std::string & answer)
+		{
+			std::stringstream strstr;
+			if(ping_sent_)
+			{
+				ping_sent_ = false;
+				connection_timeout_.expires_from_now(boost::posix_time::seconds(PingInterval));
+				connection_timeout_.async_wait(boost::bind(&Session::HandleConnectionTimeout, shared_from_this(),
+							boost::asio::placeholders::error));
+			}
+			answer = strstr.str();
+		}
+
+		void MessagePrivMsg(const std::string & command_id, const std::string & data, std::string & answer)
+		{
+			if(data.empty())
+				return;
+			MessageHandlerPtr handler = bridge_.GetMessageHandler();
+			if(handler)
+			{
+				std::string channel;
+				std::string message;
+				SplitChannelMessage(data, channel, message);
+				if(!channel.empty() && !message.empty())
+				{
+					std::string this_answer;
+					handler->Handle(nick_, channel, message, this_answer);
+					if(!this_answer.empty())
+					{
+						std::stringstream strstr;
+						WriteServerHeaderNoNick(strstr, "PRIVMSG")<<channel<<" :"<<this_answer<<"\n";
+						answer = strstr.str();
+					}
+				}
+			}
+		}
+
 		void HandleCommand(const std::string & command_data)
 		{
 			if(command_data.empty())
@@ -141,96 +298,32 @@ namespace debugirc
 			if(!authorized_)
 			{
 				//std::cout<<command<<" "<<data<<"\n";
-				if(command == "NICK")
+				std::map<std::string, MessageHandler>::iterator it = registration_handlers_.find(command);
+				std::string answer;
+				if(it != registration_handlers_.end())
 				{
-					nick_ = data;
-				}
-				else if(command == "PASS")
-				{
-					password_ = data;
-				}
-				else if(command == "USER")
-				{
-					Authorize();
+					(this->*it->second)(command, data, answer);
 				}
 				else
 				{
-					std::stringstream strstr;
-					WriteServerHeader(strstr, "421")<<command<<" :Command "<<command<<" is unknown or unsupported"<<"\n";
-					Deliver(strstr.str());
+					MessageUnknown(command, data, answer);
 				}
+				Deliver(answer);
 			}
 			else
 			{
 				//std::cout<<":"<<nick_<<"!"<<nick_<<" "<<command<<" "<<data<<"\n";
-				std::stringstream strstr;
-				if(command == "QUIT")
+				std::map<std::string, MessageHandler>::iterator it = message_handlers_.find(command);
+				std::string answer;
+				if(it != message_handlers_.end())
 				{
-					//std::cerr<<"!!!: quit\n";
-					Cleanup();
-				}
-				else if(command == "PING")
-				{
-					WriteServerHeaderNoNick(strstr, "PONG")<<data<<" :"<<data<<"\n";
-				}
-				else if(command == "JOIN")
-				{
-					if(data.length() > 1 && data[0]=='#' && bridge_.JoinChannel(data, shared_from_this()))
-					{
-						WriteUserHeaderNoNick(strstr, "JOIN")<<data<<" :"<<data<<"\n";
-						active_channels_.insert(data);
-					}
-					else
-					{
-						if(active_channels_.find(data) != active_channels_.end())
-						{
-							WriteUserHeaderNoNick(strstr, "JOIN")<<data<<" :"<<data<<"\n";
-						}
-						else
-						{
-							strstr<<":"<<nick_<<" 403 "<<data<<" :No such channel\n";
-						}
-					}
-				}
-				else if(command == "PART")
-				{
-					if(data.length() > 1 && data[0]=='#')
-					{
-						WriteUserHeaderNoNick(strstr, "PART")<<data<<" :"<<data<<"\n";
-						bridge_.LeaveChannel(data, shared_from_this());
-						active_channels_.erase(data);
-					}
-					else
-					{
-						strstr<<":"<<nick_<<" 403 "<<data<<" :No such channel\n";
-					}
-				}
-				else if(command == "PRIVMSG" || command == "NOTICE" || command == "MODE")
-				{
-					// Do nothing
-				}
-				else if(command == "LIST")
-				{
-					WriteServerHeader(strstr, "321")<<"Channel :Users  Name\n";
-					ChannelListBuilder builder(strstr, bridge_.GetServerName(), nick_);
-					bridge_.VisitChannels(&builder);
-					WriteServerHeader(strstr, "323")<<":End of /LIST\n";
-				}
-				else if(command == "PONG")
-				{
-					if(ping_sent_)
-					{
-						ping_sent_ = false;
-						connection_timeout_.expires_from_now(boost::posix_time::seconds(120));
-						connection_timeout_.async_wait(boost::bind(&Session::HandleConnectionTimeout, shared_from_this(),
-									boost::asio::placeholders::error));
-					}
+					(this->*it->second)(command, data, answer);
 				}
 				else
 				{
-					WriteServerHeader(strstr, "421")<<command<<" :Command "<<command<<" is unknown or unsupported"<<"\n";
+					MessageUnknown(command, data, answer);
 				}
-				Deliver(strstr.str());
+				Deliver(answer);
 			}
 		}
 
@@ -298,7 +391,7 @@ namespace debugirc
 					connection_timeout_.async_wait(boost::bind(&Session::HandleConnectionTimeout, shared_from_this(),
 								boost::asio::placeholders::error));
 					std::stringstream strstr;
-					WriteServerHeaderNoNick(strstr, "PING")<<":"<<bridge_.GetServerName()<<"\n";
+					strstr<<"PING :"<<bridge_.GetServerName()<<"\n";
 					Deliver(strstr.str());
 				}
 			}
@@ -321,6 +414,25 @@ namespace debugirc
 				{
 					//std::cerr<<"!!!: closing connection\n";
 					Cleanup();
+				}
+			}
+		}
+
+		void SplitChannelMessage(const std::string & data, std::string & channel, std::string & message)
+		{
+			if(data.empty())
+				return;
+			size_t pos = data.find(' ');
+			if(data[0] == '#')
+			{
+				channel = data.substr(0, pos);
+				if(pos != std::string::npos)
+				{
+					pos = data.find(':', pos+1);
+					if(pos != std::string::npos)
+					{
+						message = data.substr(pos+1);
+					}
 				}
 			}
 		}
@@ -364,6 +476,8 @@ namespace debugirc
 		};
 
 	private:
+		typedef  void (Session::*MessageHandler)(const std::string & command_id, const std::string & data, std::string & answer);
+
 		tcp::socket socket_;
 		Chat& bridge_;
 		boost::asio::streambuf buffer_;
@@ -378,6 +492,8 @@ namespace debugirc
 		bool closing_connection_;
 		bool ping_sent_;
 		boost::mutex sync_;
+		std::map<std::string, MessageHandler> registration_handlers_;
+		std::map<std::string, MessageHandler> message_handlers_;
 	};
 
 	typedef boost::shared_ptr<Session> SessionPtr;
