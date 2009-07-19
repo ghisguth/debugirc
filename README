@@ -34,6 +34,11 @@ boost::asio::ip::tcp::endpoint endpoint(boost::asio::ip::tcp::v4(), 16667);
 boost::shared_ptr<debugirc::Server> irclog_ = boost::shared_ptr<debugirc::Server>(new debugirc::Server(io_service, endpoint));
 irclog_->GetChat().AddChannel("#log", "Log");
 irclog_->GetChat().SetAutoJoin("#log");
-boost::shared_ptr<IrcLogServiceAppender> irclog_appender_ = boost::shared_ptr<IrcLogServiceAppender>(new IrcLogServiceAppender(irclog_));
+
+log4cplus::SharedAppenderPtr irclog_appender_ = log4cplus::SharedAppenderPtr(new IrcLogServiceAppender(irclog_));
 irclog_appender_->setName("IrcLogServiceAppender");
 log4cplus::Logger::getRoot().addAppender(irclog_appender_.get());
+
+io_service.run();
+
+log4cplus::Logger::getRoot().removeAppender(irclog_appender_);
