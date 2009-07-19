@@ -1,3 +1,39 @@
 debugircd
 =======================
 debug irc interface
+
+log4cplus example:
+
+class IrcLogServiceAppender
+	: public log4cplus::Appender
+{
+public:
+	IrcLogServiceAppender(const boost::shared_ptr<debugirc::Server> & ircserver)
+		: ircserver_(ircserver)
+	{}
+	virtual ~IrcLogServiceAppender() {}
+	public:
+		// member functions inherited from the Appender interface class
+		virtual void close() {}
+	protected:
+		virtual void append(const log4cplus::spi::InternalLoggingEvent& event)
+		{
+			std::string formatted_string(log_level_manager_.toString(event.getLogLevel()));
+			formatted_string += ' ';
+			formatted_string += event.getLoggerName();
+			formatted_string += " - ";
+			formatted_string += event.getMessage();
+			ircserver_->GetChat().DeliverChannel("#log", formatted_string);
+		}
+	private:
+		log4cplus::LogLevelManager      log_level_manager_;
+		boost::shared_ptr<debugirc::Server> ircserver_;
+};
+
+boost::asio::ip::tcp::endpoint endpoint(boost::asio::ip::tcp::v4(), 16667);
+boost::shared_ptr<debugirc::Server> irclog_ = boost::shared_ptr<debugirc::Server>(new debugirc::Server(io_service, endpoint));
+irclog_->GetChat().AddChannel("#log", "Log");
+irclog_->GetChat().SetAutoJoin("#log");
+boost::shared_ptr<IrcLogServiceAppender> irclog_appender_ = boost::shared_ptr<IrcLogServiceAppender>(new IrcLogServiceAppender(irclog_));
+irclog_appender_->setName("IrcLogServiceAppender");
+log4cplus::Logger::getRoot().addAppender(irclog_appender_.get());
