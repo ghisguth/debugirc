@@ -17,71 +17,72 @@ namespace debugirc
 {
 	using boost::asio::ip::tcp;
 
-	typedef boost::shared_ptr<std::string> info_message;
-	typedef std::deque<info_message> info_message_queue;
+	typedef boost::shared_ptr<std::string> InfoMessage;
+	typedef std::deque<InfoMessage> InfoMessageQueue;
 
-	class info_participant
+	class InfoParticipant
 	{
 	public:
-		virtual ~info_participant() {}
-		virtual void deliver(const info_message& msg) = 0;
+		virtual ~InfoParticipant() {}
+		virtual void Deliver(const InfoMessage& msg) = 0;
 	};
 
-	typedef boost::shared_ptr<info_participant> info_participant_ptr;
+	typedef boost::shared_ptr<InfoParticipant> InfoParticipantPtr;
 
 	//----------------------------------------------------------------------
 
-	class info_bridge
+	class InfoBridge
 	{
 	public:
-		void join(info_participant_ptr participant)
+		void Join(InfoParticipantPtr participant)
 		{
 			participants_.insert(participant);
 		}
 
-		void leave(info_participant_ptr participant)
+		void Leave(InfoParticipantPtr participant)
 		{
 			participants_.erase(participant);
 		}
 
-		void deliver(const std::string & msg)
+		void Deliver(const std::string & msg)
 		{
-			info_message info(new std::string(msg));
+			InfoMessage info(new std::string(msg));
 			std::for_each(participants_.begin(), participants_.end(),
-					boost::bind(&info_participant::deliver, _1, boost::ref(info)));
+					boost::bind(&InfoParticipant::Deliver, _1, boost::ref(info)));
 		}
 
 	private:
-		std::set<info_participant_ptr> participants_;
+		std::set<InfoParticipantPtr> participants_;
 	};
 
 	//----------------------------------------------------------------------
 
-	class session
-		: public info_participant,
-			public boost::enable_shared_from_this<session>
+	class Session
+		: public InfoParticipant,
+			public boost::enable_shared_from_this<Session>
 	{
 	public:
-		session(boost::asio::io_service& io_service, info_bridge& room)
+		Session(boost::asio::io_service& io_service, InfoBridge& room)
 			: socket_(io_service),
 				bridge_(room)
 		{
 		}
 
-		tcp::socket& socket()
+		tcp::socket & GetSocket()
 		{
 			return socket_;
 		}
 
-		void start()
+		void Start()
 		{
-			bridge_.join(shared_from_this());
+			// TODO: move Join after reg
+			bridge_.Join(shared_from_this());
 			boost::asio::async_read_until(socket_, buffer_, '\n',
-				boost::bind(&session::handle_read, this,
+				boost::bind(&Session::HandleRead, this,
 								boost::asio::placeholders::error));
 		}
 
-		void deliver(const info_message& msg)
+		void Deliver(const InfoMessage& msg)
 		{
 			if(!msg || msg->empty())
 				return;
@@ -92,12 +93,12 @@ namespace debugirc
 				boost::asio::async_write(socket_,
 						boost::asio::buffer(write_msgs_.front()->c_str(),
 							write_msgs_.front()->length()),
-						boost::bind(&session::handle_write, shared_from_this(),
+						boost::bind(&Session::HandleWrite, shared_from_this(),
 							boost::asio::placeholders::error));
 			}
 		}
 
-		void handle_read(const boost::system::error_code& error)
+		void HandleRead(const boost::system::error_code& error)
 		{
 			if (!error)
 			{
@@ -106,16 +107,16 @@ namespace debugirc
 				std::getline(is, line);
 				std::cout<<"<<["<<line<<"]\n";
 				boost::asio::async_read_until(socket_, buffer_, '\n',
-					boost::bind(&session::handle_read, this,
+					boost::bind(&Session::HandleRead, this,
 								boost::asio::placeholders::error));
 			}
 			else
 			{
-				bridge_.leave(shared_from_this());
+				bridge_.Leave(shared_from_this());
 			}
 		}
 
-		void handle_write(const boost::system::error_code& error)
+		void HandleWrite(const boost::system::error_code& error)
 		{
 			if (!error)
 			{
@@ -125,50 +126,50 @@ namespace debugirc
 					boost::asio::async_write(socket_,
 							boost::asio::buffer(write_msgs_.front()->c_str(),
 								write_msgs_.front()->length()),
-							boost::bind(&session::handle_write, shared_from_this(),
+							boost::bind(&Session::HandleWrite, shared_from_this(),
 								boost::asio::placeholders::error));
 				}
 			}
 			else
 			{
-				bridge_.leave(shared_from_this());
+				bridge_.Leave(shared_from_this());
 			}
 		}
 
 	private:
 		tcp::socket socket_;
-		info_bridge& bridge_;
+		InfoBridge& bridge_;
 		boost::asio::streambuf buffer_;
-		info_message_queue write_msgs_;
+		InfoMessageQueue write_msgs_;
 	};
 
-	typedef boost::shared_ptr<session> session_ptr;
+	typedef boost::shared_ptr<Session> SessionPtr;
 
 	//----------------------------------------------------------------------
 
-	class server
+	class Server
 	{
 	public:
-		server(boost::asio::io_service& io_service,
+		Server(boost::asio::io_service& io_service,
 				const tcp::endpoint& endpoint)
 			: io_service_(io_service),
 				acceptor_(io_service, endpoint)
 		{
-			session_ptr new_session(new session(io_service_, bridge_));
-			acceptor_.async_accept(new_session->socket(),
-					boost::bind(&server::handle_accept, this, new_session,
+			SessionPtr new_session(new Session(io_service_, bridge_));
+			acceptor_.async_accept(new_session->GetSocket(),
+					boost::bind(&Server::HandleAccept, this, new_session,
 						boost::asio::placeholders::error));
 		}
 
-		void handle_accept(session_ptr current_session,
+		void HandleAccept(SessionPtr current_Session,
 				const boost::system::error_code& error)
 		{
 			if (!error)
 			{
-				current_session->start();
-				session_ptr new_session(new session(io_service_, bridge_));
-				acceptor_.async_accept(new_session->socket(),
-						boost::bind(&server::handle_accept, this, new_session,
+				current_Session->Start();
+				SessionPtr new_session(new Session(io_service_, bridge_));
+				acceptor_.async_accept(new_session->GetSocket(),
+						boost::bind(&Server::HandleAccept, this, new_session,
 							boost::asio::placeholders::error));
 			}
 		}
@@ -176,7 +177,7 @@ namespace debugirc
 	private:
 		boost::asio::io_service& io_service_;
 		tcp::acceptor acceptor_;
-		info_bridge bridge_;
+		InfoBridge bridge_;
 	};
 
 } // namespace debugirc

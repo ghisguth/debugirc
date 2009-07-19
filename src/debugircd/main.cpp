@@ -32,7 +32,7 @@ int main(int argc, char** argv)
 
 		boost::asio::io_service io_service;
 		boost::asio::ip::tcp::endpoint endpoint(boost::asio::ip::tcp::v4(), std::atoi(argv[1]));
-		debugirc::server s(io_service, endpoint);
+		debugirc::Server s(io_service, endpoint);
 
 		boost::thread t(boost::bind(&boost::asio::io_service::run, &io_service));
 		main_shutdown_manager.wait();
