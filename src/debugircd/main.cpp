@@ -9,10 +9,28 @@
 #include <boost/thread/barrier.hpp>
 #include <boost/bind.hpp>
 #include <boost/asio.hpp>
+#include <boost/lexical_cast.hpp>
 #include <signal.h>
-#include "core/common.hpp"
-#include "core/shutdown_manager.hpp"
+#include "shutdown_manager.hpp"
 #include "debugirc/debugirc.hpp"
+
+void DebugThread(debugirc::Server &  srv)
+{
+	try
+	{
+		while(true)
+		{
+			boost::this_thread::interruption_point();
+			boost::this_thread::sleep(boost::posix_time::milliseconds(rand()%500 + 500));
+			if((rand()%1000) < 300)
+				srv.GetChat().DeliverChannel("#system", boost::lexical_cast<std::string>(rand()));
+			else
+				srv.GetChat().DeliverChannel("#debug", boost::lexical_cast<std::string>(rand()));
+		}
+	}
+	catch(boost::thread_interrupted const&)
+  {}
+}
 
 int main(int argc, char** argv)
 {
@@ -34,8 +52,19 @@ int main(int argc, char** argv)
 		boost::asio::ip::tcp::endpoint endpoint(boost::asio::ip::tcp::v4(), std::atoi(argv[1]));
 		debugirc::Server s(io_service, endpoint);
 
+		s.GetChat().AddChannel("#system", "System channel");
+		s.GetChat().SetAutoJoin("#system");
+		s.GetChat().AddChannel("#debug", "DEBUG");
+		s.GetChat().AddChannel("#test", "Test  CHANNEL");
+		s.GetChat().AddChannel("#test2", "TEST2");
+
 		boost::thread t(boost::bind(&boost::asio::io_service::run, &io_service));
+		boost::thread_group t2;
+		for(int i = 0; i < 32; ++i)
+			t2.create_thread(boost::bind(&DebugThread, boost::ref(s)));
 		main_shutdown_manager.wait();
+		t2.interrupt_all();
+		t2.join_all();
 		io_service.stop();
 	}
 	catch(std::exception & e)

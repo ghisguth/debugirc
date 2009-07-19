@@ -1,3 +1,3 @@
 include_directories(${CMAKE_CURRENT_SOURCE_DIR})
-subdirs(debugirc)
+include_directories(${CMAKE_CURRENT_SOURCE_DIR}../debugirc)
 subdirs(debugircd)

@@ -15,7 +15,6 @@
 #if defined(__WIN32__) || defined(WIN32) || defined(_WIN32)
   #include <signal.h>
 #endif
-#include "core/common.hpp"
 
 
 ///
