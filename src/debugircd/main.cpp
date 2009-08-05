@@ -39,13 +39,13 @@ public:
 	TestMessageHandler(debugirc::Server &  server)
 		: server_(server)
 	{}
-	virtual void Handle(const std::string & username, const std::string & channel, const std::string & data, std::string & answer)
+	virtual void Handle(const std::string & username, const std::string & channel, const std::string & data, SendCallback send_callback)
 	{
 		if(channel == "#system")
 		{
 			std::stringstream strstr;
 			strstr<<"system command "<<data;
-			answer = strstr.str();
+			send_callback(strstr.str());
 		}
 		else if(channel.length() > 0 &&  channel[0] == '#' && data.find('\n') == std::string::npos)
 		{

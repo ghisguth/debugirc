@@ -276,16 +276,18 @@ namespace debugirc
 				SplitChannelMessage(data, channel, message);
 				if(!channel.empty() && !message.empty())
 				{
-					std::string this_answer;
-					handler->Handle(nick_, channel, message, this_answer);
-					if(!this_answer.empty())
-					{
-						std::stringstream strstr;
-						WriteServerHeaderNoNick(strstr, "PRIVMSG")<<channel<<" :"<<this_answer<<"\n";
-						answer = strstr.str();
-					}
+					handler->Handle(nick_, channel, message, boost::bind(&Session::SendPrivate, this, channel, _1));
 				}
 			}
+		}
+
+		void SendPrivate(const std::string & channel_id, const std::string & text)
+		{
+			if(channel_id.empty() || text.empty())
+				return;
+			std::stringstream strstr;
+			WriteServerHeaderNoNick(strstr, "PRIVMSG")<<channel_id<<" :"<<text<<"\n";
+			Deliver(strstr.str());
 		}
 
 		void HandleCommand(const std::string & command_data)
